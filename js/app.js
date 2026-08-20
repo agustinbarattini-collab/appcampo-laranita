@@ -2,6 +2,7 @@ import { cargaGranosView } from "./cargaGranos.js";
 import { maestrosHubView } from "./maestrosHub.js";
 import { APP_CONFIG } from "./config.js";
 import { syncAll, pullAll, importarMaestros, contarPendientes } from "./sync.js";
+import { borrarTodoLocal } from "./db.js";
 
 // Esta empresa solo usa Carga de Granos + Maestros (a diferencia de las
 // demás copias de AppCampo, que tienen las 6 secciones completas).
@@ -27,8 +28,42 @@ async function updateSyncStatus() {
   }
 }
 
+// Reset remoto: si APP_CONFIG.resetVersion subió respecto de lo que este
+// teléfono tiene guardado, borra toda la base local y recarga — así se
+// puede forzar que todos los dispositivos "arranquen de cero" (ej. después
+// de borrar algo grande directo en la Sheet) sin pedirle a cada uno que
+// vaya a borrar el almacenamiento a mano desde Chrome. Corre DESPUÉS de
+// syncAll() para que cualquier registro pendiente ya se haya subido; si
+// todavía queda algo sin sincronizar (sin conexión, por ejemplo), no borra
+// nada y reintenta en el próximo inicio, para no perder datos.
+const RESET_STORAGE_KEY = "appcampo_reset_version";
+
+async function verificarResetRemoto() {
+  const versionObjetivo = APP_CONFIG.resetVersion || 0;
+  // Sin nada guardado todavía (primera vez que corre este código en este
+  // teléfono) se toma como versión 0 — así un teléfono viejo que nunca supo
+  // de esto pero necesita el reset (resetVersion > 0) lo recibe en su
+  // primer load con esta versión, en vez de marcarse como "ya al día" sin
+  // haber borrado nada.
+  const versionGuardada = Number(localStorage.getItem(RESET_STORAGE_KEY)) || 0;
+  if (versionGuardada >= versionObjetivo) return false;
+
+  const pendientes = await contarPendientes();
+  if (pendientes > 0) {
+    console.warn("Reset remoto pendiente: hay registros sin sincronizar, se reintenta en el próximo inicio.");
+    return false;
+  }
+  await borrarTodoLocal();
+  localStorage.setItem(RESET_STORAGE_KEY, String(versionObjetivo));
+  return true;
+}
+
 async function runSync() {
   await syncAll();
+  if (await verificarResetRemoto()) {
+    location.reload();
+    return;
+  }
   // Los maestros (Lotes/Silos/Corredores/etc.) se traen ANTES que pullAll():
   // al traer una Carga de Granos, su origen se resuelve por NOMBRE contra los
   // maestros locales (resolverIdPorNombre en sync.js) y, si no encuentra
