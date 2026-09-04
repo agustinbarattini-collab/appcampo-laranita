@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-laranita-v6";
+const CACHE_NAME = "appcampo-laranita-v7";
 const APP_SHELL = [
   "./",
   "./index.html",
