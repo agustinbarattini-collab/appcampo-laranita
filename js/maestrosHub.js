@@ -2,18 +2,24 @@ import {
   lotesView,
   corredoresView,
   silosBolsaView,
+  proveedoresView,
+  contratistasView,
+  insumosView,
   campaniasView,
+  galponesView,
 } from "./maestros.js";
 import { APP_CONFIG } from "./config.js";
 import { importarMaestros } from "./sync.js";
 
-// Esta empresa solo usa Carga de Granos, así que Maestros se limita a lo que
-// esa sección necesita (sin Insumos/Proveedores/Contratistas).
 const subViews = {
   campanias: { view: campaniasView, label: "Campañas" },
   lotes: { view: lotesView, label: "Lotes" },
   silos: { view: silosBolsaView, label: "Silos Bolsa" },
   corredores: { view: corredoresView, label: "Corredores" },
+  insumos: { view: insumosView, label: "Insumos" },
+  proveedores: { view: proveedoresView, label: "Proveedores" },
+  contratistas: { view: contratistasView, label: "Contratistas" },
+  galpones: { view: galponesView, label: "Galpones" },
 };
 
 const maestrosHubView = {
