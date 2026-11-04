@@ -10,6 +10,8 @@ const APP_CONFIG = {
   // Esta empresa no maneja retiros de insumos por contratista (no tiene
   // Insumos → Salida): Fitosanitarios no controla stock pendiente.
   controlStockContratista: false,
+  // Productos por orden/aplicación (por defecto 6). Ver producto7... en Code.gs.
+  maxProductos: 7,
 };
 
 export { APP_CONFIG };

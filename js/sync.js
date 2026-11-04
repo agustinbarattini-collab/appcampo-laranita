@@ -42,6 +42,11 @@ function comprimirFotoABase64(blob, maxDim = 1600, calidad = 0.7) {
   });
 }
 
+// Cantidad máxima de productos por aplicación/orden: 6 por defecto, y cada
+// empresa puede subirlo con maxProductos en config.js (requiere que su Sheet
+// tenga las columnas productoN... correspondientes, ver Code.gs).
+const MAX_PRODUCTOS = APP_CONFIG.maxProductos || 6;
+
 function flattenAplicacion(r) {
   const out = { ...r };
   (r.productos || []).forEach((p, i) => {
@@ -73,9 +78,19 @@ function flattenOrdenTrabajo(r) {
     out[`producto${i + 1}DosisPorHa`] = p.dosisPorHa;
     out[`producto${i + 1}Unidad`] = p.unidad;
   });
+  out.estado = r.anulada ? "Anulada" : "";
+  out.anulada = undefined;
   out.lotes = undefined;
   out.productosPlanificados = undefined;
   return out;
+}
+
+// Columna "estado" de la pestaña Órdenes de Trabajo: el asesor escribe
+// "Anulada" para cancelar una orden sin borrar la fila (borrarla no la saca
+// de los celulares, la sincronización nunca borra lo ya descargado).
+function estaAnulada(estado) {
+  const e = String(estado || "").trim().toLowerCase();
+  return e.startsWith("anul") || e.startsWith("cancel");
 }
 
 const TIPOS = [
@@ -500,7 +515,7 @@ async function unflattenAplicacion(fila) {
   const loteId = await resolverIdPorNombre("lotes", fila.loteNombre);
   const orden = fila.ordenTrabajoNombre ? await resolverOrden(fila.ordenTrabajoNombre, fila.contratistaNombre) : null;
   const productos = [];
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= MAX_PRODUCTOS; i++) {
     const nombre = fila[`producto${i}Nombre`];
     const cantidad = fila[`producto${i}Cantidad`];
     if (!nombre || cantidad === "" || cantidad === undefined) continue;
@@ -610,7 +625,7 @@ async function unflattenOrdenTrabajo(fila) {
     lotes.push({ loteId, loteNombre: nombreLote });
   }
   const productosPlanificados = [];
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= MAX_PRODUCTOS; i++) {
     const nombre = fila[`producto${i}Nombre`];
     const dosisPorHa = fila[`producto${i}DosisPorHa`];
     if (!nombre || dosisPorHa === "" || dosisPorHa === undefined) continue;
@@ -640,6 +655,7 @@ async function unflattenOrdenTrabajo(fila) {
     has: parseFloat(fila.has) || 0,
     productosPlanificados,
     observaciones: fila.observaciones || "",
+    anulada: estaAnulada(fila.estado),
     fechaCreacion: fila.fechaCreacion || new Date().toISOString(),
     sincronizado: true,
     fechaCreacionRegistro: fila.fechaCreacionRegistro || new Date().toISOString(),
