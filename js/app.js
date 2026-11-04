@@ -1,13 +1,18 @@
 import { cargaGranosView } from "./cargaGranos.js";
 import { maestrosHubView } from "./maestrosHub.js";
+import { aplicacionesFitosanitariosView } from "./aplicacionesFitosanitarios.js";
+import { ordenesTrabajoView } from "./ordenesTrabajo.js";
 import { APP_CONFIG } from "./config.js";
 import { syncAll, pullAll, importarMaestros, contarPendientes } from "./sync.js";
 import { borrarTodoLocal } from "./db.js";
 
-// Esta empresa solo usa Carga de Granos + Maestros (a diferencia de las
-// demás copias de AppCampo, que tienen las 6 secciones completas).
+// Esta empresa usa Carga de Granos, Fitosanitarios, Órdenes y Maestros (a
+// diferencia de las demás copias de AppCampo, que tienen las 6 secciones
+// completas). No maneja Insumos ni Siembra.
 const routes = {
   carga: { view: cargaGranosView, label: "Carga de Granos" },
+  fitosanitarios: { view: aplicacionesFitosanitariosView, label: "Fitosanitarios" },
+  ordenes: { view: ordenesTrabajoView, label: "Órdenes de Trabajo" },
   maestros: { view: maestrosHubView, label: "Maestros" },
 };
 
