@@ -12,6 +12,8 @@ const APP_CONFIG = {
   controlStockContratista: false,
   // Productos por orden/aplicación (por defecto 6). Ver producto7... en Code.gs.
   maxProductos: 7,
+  // Detectar el lote por ubicación (GPS) en Fitosanitarios: necesita js/lotesGeo.js.
+  lotesGeo: true,
 };
 
 export { APP_CONFIG };
