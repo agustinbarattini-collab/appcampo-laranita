@@ -401,6 +401,10 @@ const aplicacionesFitosanitariosView = {
             return;
           }
           const elegido = candidatos.find((l) => lotesConOrden.has(l.id)) || candidatos[0];
+          // Si el polígono del mapa se llama distinto que el lote de la app
+          // (ej. "SP 4" dentro del lote "SP 3-4-5-6"), se aclara cuál es.
+          const dondeLote =
+            geo.normalizar(elegido.nombre) !== geo.normalizar(objetivo.nombre) ? `${donde} (lote ${elegido.nombre})` : donde;
           const ordenesLote = ordenesConEstado.filter(
             (o) => o.estado !== "completada" && o.lotes.some((l) => l.loteId === elegido.id)
           );
@@ -410,13 +414,13 @@ const aplicacionesFitosanitariosView = {
             if (ordenesLote.length === 1) {
               fOrden.value = ordenesLote[0].id;
               fOrden.dispatchEvent(new Event("change"));
-              mostrar(`${donde}. Orden propuesta: ${ordenesLote[0].nombre}. ${precision}`);
+              mostrar(`${dondeLote}. Orden propuesta: ${ordenesLote[0].nombre}. ${precision}`);
             } else {
-              mostrar(`${donde}. Hay ${ordenesLote.length} órdenes pendientes para este lote: elegí cuál. ${precision}`);
+              mostrar(`${dondeLote}. Hay ${ordenesLote.length} órdenes pendientes para este lote: elegí cuál. ${precision}`);
             }
           } else {
             if ([...fLote.options].some((o) => o.value === elegido.id)) fLote.value = elegido.id;
-            mostrar(`${donde}. No hay órdenes pendientes para este lote (podés cargar la aplicación sin orden). ${precision}`);
+            mostrar(`${dondeLote}. No hay órdenes pendientes para este lote (podés cargar la aplicación sin orden). ${precision}`);
           }
         } catch (err) {
           mostrar(err.message || "No se pudo detectar el lote.");
