@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-laranita-v20";
+const CACHE_NAME = "appcampo-laranita-v21";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -15,6 +15,7 @@ const APP_SHELL = [
   "./js/ordenesTrabajo.js",
   "./js/geoLotes.js",
   "./js/lotesGeo.js",
+  "./js/zonaOrden.js",
   "./js/stockUtils.js",
   "./js/ui.js",
   "./icons/icon-192.png",
