@@ -596,20 +596,42 @@ function doPost(e) {
       sheet = ss.getSheetByName(cfg.name);
     }
     const r = body.registro || {};
-    let fotoUrl = "";
-    if (r.fotoBase64) {
-      fotoUrl = guardarFotoEnDrive(r.fotoBase64, body.tipo, r.id);
+    // Un mismo registro puede llegar DOS veces (el celular no recibió la respuesta y
+    // reintenta, o dos pestañas sincronizan a la vez): se serializa con un candado y,
+    // si ese id ya está en la pestaña, no se vuelve a agregar (se contesta ok igual,
+    // así el celular lo da por sincronizado y deja de reenviarlo).
+    const candado = LockService.getScriptLock();
+    candado.waitLock(30000);
+    try {
+      const colId = cfg.headers.indexOf("id") + 1;
+      const ultima = sheet.getLastRow();
+      if (colId > 0 && r.id && ultima >= 2) {
+        const ids = sheet.getRange(2, colId, ultima - 1, 1).getValues();
+        for (let i = 0; i < ids.length; i++) {
+          if (String(ids[i][0]) === String(r.id)) {
+            const colFoto = cfg.headers.indexOf("fotoUrl") + 1;
+            const fotoExistente = colFoto > 0 ? String(sheet.getRange(i + 2, colFoto).getValue() || "") : "";
+            return respond({ ok: true, fotoUrl: fotoExistente, duplicado: true });
+          }
+        }
+      }
+      let fotoUrl = "";
+      if (r.fotoBase64) {
+        fotoUrl = guardarFotoEnDrive(r.fotoBase64, body.tipo, r.id);
+      }
+      const row = cfg.headers.map(function (h) {
+        if (h === "fechaSincronizacion") return new Date().toISOString();
+        if (h === "fotoUrl") return fotoUrl;
+        const v = r[h];
+        if (v === undefined || v === null) return "";
+        if (typeof v === "object") return JSON.stringify(v);
+        return v;
+      });
+      sheet.appendRow(row);
+      return respond({ ok: true, fotoUrl: fotoUrl });
+    } finally {
+      candado.releaseLock();
     }
-    const row = cfg.headers.map(function (h) {
-      if (h === "fechaSincronizacion") return new Date().toISOString();
-      if (h === "fotoUrl") return fotoUrl;
-      const v = r[h];
-      if (v === undefined || v === null) return "";
-      if (typeof v === "object") return JSON.stringify(v);
-      return v;
-    });
-    sheet.appendRow(row);
-    return respond({ ok: true, fotoUrl: fotoUrl });
   } catch (err) {
     return respond({ ok: false, error: String(err) });
   }
@@ -712,6 +734,48 @@ function responderRegistros() {
     registros[key] = sheet ? leerPestana(sheet, cfg.headers) : [];
   });
   return respond({ ok: true, registros: registros });
+}
+
+/**
+ * Limpieza para correr UNA vez a mano desde el editor (▶): en cada pestaña borra
+ * las filas repetidas (mismo id), dejando la primera. Solo borra una fila si es
+ * idéntica a la primera salvo la fecha de sincronización; si difiere en algo, no la
+ * toca y la avisa. Muestra el resumen en pantalla y en Ver → Registros.
+ */
+function eliminarDuplicadosPorId() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const resumen = [];
+  Object.keys(SHEETS).forEach(function (key) {
+    const cfg = SHEETS[key];
+    const sheet = ss.getSheetByName(cfg.name);
+    const colId = cfg.headers.indexOf("id");
+    if (!sheet || colId < 0 || sheet.getLastRow() < 2) return;
+    const colSync = cfg.headers.indexOf("fechaSincronizacion");
+    const columnas = Math.min(cfg.headers.length, sheet.getLastColumn());
+    const valores = sheet.getRange(2, 1, sheet.getLastRow() - 1, columnas).getValues();
+    const vistos = {};
+    const borrar = [];
+    valores.forEach(function (fila, i) {
+      const id = String(fila[colId]).trim();
+      if (!id) return;
+      if (vistos[id] === undefined) {
+        vistos[id] = i;
+        return;
+      }
+      const primera = valores[vistos[id]];
+      const igual = fila.every(function (v, c) { return c === colSync || String(v) === String(primera[c]); });
+      if (igual) borrar.push(i + 2);
+      else resumen.push(cfg.name + ": la fila " + (i + 2) + " repite el id de la fila " + (vistos[id] + 2) + " pero tiene datos distintos: NO se tocó.");
+    });
+    borrar.reverse().forEach(function (n) { sheet.deleteRow(n); });
+    if (borrar.length) resumen.push(cfg.name + ": " + borrar.length + " fila(s) repetida(s) borrada(s).");
+  });
+  const texto = resumen.length ? resumen.join("\n") : "No había filas repetidas.";
+  Logger.log(texto);
+  try {
+    SpreadsheetApp.getActive().toast(texto.replace(/\n/g, " · "), "Duplicados", 10);
+  } catch (e) {}
+  return texto;
 }
 
 function leerPestana(sheet, headers) {
