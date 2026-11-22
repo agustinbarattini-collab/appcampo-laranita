@@ -1,12 +1,30 @@
-import { dbGetAll, dbGet, dbPut, dbDelete, uid } from "./db.js";
+import { dbGetAll, dbGet, dbPut, uid } from "./db.js";
+import { guardarEdicion, eliminarRegistro, listarCambios, claveDe } from "./cambios.js";
 import { getSilosBolsaConStock, getStockGranosPorCultivo, agruparSilosPorNombreCultivo } from "./stockUtils.js";
-import { parseNumero, formatearFechaCorta } from "./ui.js";
+import { parseNumero, formatearFechaCorta, asegurarOpcion } from "./ui.js";
 
 const STORE = "cargasGranos";
 const STORE_AJUSTES = "ajustesSiloBolsa";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Carga que se está corrigiendo (null = formulario de carga nueva). Vive acá afuera
+// para que sobreviva a volver a dibujar la pantalla.
+let editando = null;
+
+// Kg que esta misma carga (si se está corrigiendo) ya descontó de un silo: sirven para
+// no contarlos dos veces al avisar que se carga más de lo que queda.
+function kgPreviosDe(carga, tipo, id) {
+  if (!carga || !id) return 0;
+  const kg2 = carga.kgOrigen2 || 0;
+  const kg3 = carga.kgOrigen3 || 0;
+  let total = 0;
+  if (carga.origenTipo === tipo && carga.origenId === id) total += (carga.kgNeto || 0) - kg2 - kg3;
+  if (carga.origen2Tipo === tipo && carga.origen2Id === id) total += kg2;
+  if (carga.origen3Tipo === tipo && carga.origen3Id === id) total += kg3;
+  return total;
 }
 
 async function poblarOrigenSelect(select, tipo) {
@@ -133,6 +151,15 @@ const cargaGranosView = {
     container.innerHTML = `
       <h2>Carga de Granos de Campo</h2>
       ${silos.length > 0 ? '<div class="card" id="stockGranosCard"></div>' : ""}
+      ${
+        editando
+          ? `<div class="card" id="bannerEdicion" style="border:2px solid var(--color-primario);">
+        <strong>Estás corrigiendo una carga ya guardada</strong>
+        <div class="muted">${formatearFechaCorta(editando.fecha)} · ${editando.origenNombre || ""} · ${editando.kgNeto} kg. Cambiá lo que esté mal y tocá "Guardar cambios".</div>
+        <button type="button" class="secondary" id="btnCancelarEdicion" style="margin-top:8px;">Cancelar corrección</button>
+      </div>`
+          : ""
+      }
       <div class="card">
         <form id="formCarga">
           <div class="field">
@@ -248,7 +275,7 @@ const cargaGranosView = {
             <div class="muted" id="gpsResultado">Sin capturar</div>
           </div>
 
-          <div class="field">
+          <div class="field" id="campoFoto">
             <label>Foto (opcional)</label>
             <input type="file" accept="image/*" capture="environment" id="fFoto" />
             <div class="muted">Se sube a Google Drive al sincronizar y queda linkeada en la planilla.</div>
@@ -261,7 +288,7 @@ const cargaGranosView = {
 
           <div id="stockWarning" class="muted"></div>
 
-          <button type="submit">Guardar carga</button>
+          <button type="submit">${editando ? "Guardar cambios" : "Guardar carga"}</button>
         </form>
       </div>
 
@@ -405,6 +432,58 @@ const cargaGranosView = {
 
     await poblarCorredorSelect(container.querySelector("#fCorredorId"));
 
+    // Modo corrección: se precarga el formulario con los datos de la carga elegida.
+    if (editando) {
+      const c = editando;
+      const kg2 = c.kgOrigen2 || 0;
+      const kg3 = c.kgOrigen3 || 0;
+      const campaniaEdit = campanias.find((x) => x.id === c.campaniaId) || campanias.find((x) => x.nombre === c.campaniaNombre);
+      if (campaniaEdit) fCampaniaSel.value = campaniaEdit.id;
+      container.querySelector("#fFecha").value = String(c.fecha || today()).slice(0, 10);
+      origenTipoSel.value = c.origenTipo === "silo" ? "silo" : "lote";
+      await actualizarOrigen1();
+      asegurarOpcion(origenIdSel, c.origenId, c.origenNombre);
+      fNeto.value = String((c.kgNeto || 0) - kg2 - kg3);
+      if (c.origen2Nombre) {
+        await activarOrigen2();
+        origen2TipoSel.value = c.origen2Tipo === "silo" ? "silo" : "lote";
+        await actualizarOrigen2();
+        asegurarOpcion(origen2IdSel, c.origen2Id, c.origen2Nombre);
+        fKgOrigen2.value = String(kg2);
+        if (c.origen3Nombre) {
+          await activarOrigen3();
+          origen3TipoSel.value = c.origen3Tipo === "silo" ? "silo" : "lote";
+          await actualizarOrigen3();
+          asegurarOpcion(origen3IdSel, c.origen3Id, c.origen3Nombre);
+          fKgOrigen3.value = String(kg3);
+        }
+        actualizarNetoTotal();
+      }
+      fCultivo.value = c.cultivo || "";
+      container.querySelector("#fCtg").value = c.ctg || "";
+      container.querySelector("#fChofer").value = c.chofer || "";
+      container.querySelector("#fPatente").value = c.patente || "";
+      const corredorEdit = (await dbGetAll("corredores")).find((x) => x.id === c.corredorId || x.nombre === c.corredorNombre);
+      if (corredorEdit) container.querySelector("#fCorredorId").value = corredorEdit.id;
+      container.querySelector("#fHumedad").value = c.humedad === null || c.humedad === undefined ? "" : String(c.humedad);
+      container.querySelector("#fObs").value = c.observaciones || "";
+      if (c.gps) {
+        gps = c.gps;
+        container.querySelector("#gpsResultado").textContent = `Lat ${Number(c.gps.lat).toFixed(5)}, Lng ${Number(c.gps.lng).toFixed(5)} (la que ya tenía)`;
+      }
+      // Al corregir no se vuelve a preguntar por "finalizar silo" (eso queda como estaba) ni se
+      // cambia la foto de una carga que ya subió (solo si todavía está pendiente).
+      for (const idBloque of ["bloqueFinalizarOrigen1", "bloqueFinalizarOrigen2", "bloqueFinalizarOrigen3"]) {
+        container.querySelector("#" + idBloque).style.display = "none";
+      }
+      if (c.sincronizado) container.querySelector("#campoFoto").style.display = "none";
+      container.querySelector("#btnCancelarEdicion").addEventListener("click", () => {
+        editando = null;
+        this.render(container);
+      });
+      container.querySelector("#bannerEdicion").scrollIntoView({ block: "start" });
+    }
+
     container.querySelector("#btnGps").addEventListener("click", () => {
       const resultado = container.querySelector("#gpsResultado");
       if (!navigator.geolocation) {
@@ -481,9 +560,10 @@ const cargaGranosView = {
         const silo = silosStock.find((s) => s.id === origenId);
         origenNombre = silo ? silo.nombre : "";
         silo1KgResidual = silo ? silo.kgResidual : 0;
-        if (silo && kgOrigen1 > silo.kgResidual) {
+        const residual1 = silo ? silo.kgResidual + kgPreviosDe(editando, "silo", origenId) : 0;
+        if (silo && kgOrigen1 > residual1) {
           const continuar = confirm(
-            `El silo bolsa "${silo.nombre}" tiene ${silo.kgResidual} kg residuales y estás cargando ${kgOrigen1} kg.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
+            `El silo bolsa "${silo.nombre}" tiene ${residual1} kg residuales y estás cargando ${kgOrigen1} kg.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
           );
           if (!continuar) return;
         }
@@ -502,9 +582,10 @@ const cargaGranosView = {
           const silo2 = silosStock2.find((s) => s.id === origen2Id);
           origen2Nombre = silo2 ? silo2.nombre : "";
           silo2KgResidual = silo2 ? silo2.kgResidual : 0;
-          if (silo2 && kgOrigen2 > silo2.kgResidual) {
+          const residual2 = silo2 ? silo2.kgResidual + kgPreviosDe(editando, "silo", origen2Id) : 0;
+          if (silo2 && kgOrigen2 > residual2) {
             const continuar2 = confirm(
-              `El silo bolsa "${silo2.nombre}" tiene ${silo2.kgResidual} kg residuales y estás cargando ${kgOrigen2} kg desde ahí.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
+              `El silo bolsa "${silo2.nombre}" tiene ${residual2} kg residuales y estás cargando ${kgOrigen2} kg desde ahí.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
             );
             if (!continuar2) return;
           }
@@ -524,9 +605,10 @@ const cargaGranosView = {
           const silo3 = silosStock3.find((s) => s.id === origen3Id);
           origen3Nombre = silo3 ? silo3.nombre : "";
           silo3KgResidual = silo3 ? silo3.kgResidual : 0;
-          if (silo3 && kgOrigen3 > silo3.kgResidual) {
+          const residual3 = silo3 ? silo3.kgResidual + kgPreviosDe(editando, "silo", origen3Id) : 0;
+          if (silo3 && kgOrigen3 > residual3) {
             const continuar3 = confirm(
-              `El silo bolsa "${silo3.nombre}" tiene ${silo3.kgResidual} kg residuales y estás cargando ${kgOrigen3} kg desde ahí.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
+              `El silo bolsa "${silo3.nombre}" tiene ${residual3} kg residuales y estás cargando ${kgOrigen3} kg desde ahí.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
             );
             if (!continuar3) return;
           }
@@ -550,8 +632,7 @@ const cargaGranosView = {
 
       const fecha = container.querySelector("#fFecha").value;
 
-      const registro = {
-        id: uid(),
+      const datos = {
         fecha,
         campaniaId,
         campaniaNombre: campania ? campania.nombre : "",
@@ -579,6 +660,22 @@ const cargaGranosView = {
         humedad: container.querySelector("#fHumedad").value.trim() ? parseNumero(container.querySelector("#fHumedad").value) : null,
         observaciones: container.querySelector("#fObs").value.trim(),
         gps,
+      };
+
+      // Corrección: se conserva el id (es la misma carga) y lo que no se puede cambiar desde acá.
+      if (editando) {
+        const corregida = { ...editando, ...datos, foto: fotoBlob || editando.foto || null };
+        await guardarEdicion(STORE, "cargaGranos", corregida);
+        editando = null;
+        window.dispatchEvent(new Event("appcampo-sync-now"));
+        alert("Carga corregida.");
+        this.render(container);
+        return;
+      }
+
+      const registro = {
+        id: uid(),
+        ...datos,
         foto: fotoBlob,
         sincronizado: false,
         fechaCreacionRegistro: new Date().toISOString(),
@@ -611,9 +708,21 @@ const cargaGranosView = {
   },
 };
 
+// Aviso extra al eliminar: si en la misma fecha se finalizó uno de los silos de la carga,
+// probablemente fue esta carga (finalizar el silo no se deshace solo).
+async function avisoSiloFinalizado(c) {
+  const nombres = [c.origenNombre, c.origen2Nombre, c.origen3Nombre].filter(Boolean);
+  const ajustes = await dbGetAll(STORE_AJUSTES);
+  const finalizado = ajustes.find((a) => a.fecha === c.fecha && nombres.includes(a.siloBolsaNombre));
+  return finalizado
+    ? `\n\nOjo: ese día se finalizó el silo bolsa "${finalizado.siloBolsaNombre}", probablemente con esta carga. Eliminar la carga NO lo reactiva (si hace falta, avisale al administrador).`
+    : "";
+}
+
 async function renderListadoCargas(container, campaniaActiva) {
   const lista = container.querySelector("#listaCargas");
   const todasLasCargas = (await dbGetAll(STORE)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  const cambiosEnCola = new Map((await listarCambios()).map((x) => [x.clave, x]));
 
   if (todasLasCargas.length === 0) {
     lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas</h2><div class="empty-state">Todavía no registraste cargas.</div>`;
@@ -644,21 +753,35 @@ async function renderListadoCargas(container, campaniaActiva) {
       : c.foto
       ? " · Foto pendiente de subir"
       : "";
+    const cambio = cambiosEnCola.get(claveDe("cargaGranos", c.id));
+    const correccionPendiente = c.sincronizado && cambio && cambio.accion === "editar";
+    const errorTxt = cambio && cambio.error ? `<div class="muted" style="color:#c0392b;">No se pudo subir la corrección: ${cambio.error}</div>` : "";
     row.innerHTML = `
       <div>
         <div>${origenTxt} → ${c.corredorNombre}</div>
         <div class="muted">${formatearFechaCorta(c.fecha)} · Campaña ${campaniaTxt} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
+        ${errorTxt}
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-        <span class="pill ${c.sincronizado ? "sincronizado" : "pendiente"}">${c.sincronizado ? "Sincronizado" : "Pendiente"}</span>
-        <button class="danger" data-id="${c.id}">Borrar</button>
+        <span class="pill ${c.sincronizado && !correccionPendiente ? "sincronizado" : "pendiente"}">${correccionPendiente ? "Corrección pendiente" : c.sincronizado ? "Sincronizado" : "Pendiente"}</span>
+        <button class="secondary" data-accion="editar">Editar</button>
+        <button class="danger" data-accion="eliminar">Eliminar</button>
       </div>
     `;
-    row.querySelector("button").addEventListener("click", async () => {
-      if (confirm("¿Borrar este registro?")) {
-        await dbDelete(STORE, c.id);
-        renderListadoCargas(container, campaniaActiva);
-      }
+    row.querySelector('[data-accion="editar"]').addEventListener("click", () => {
+      editando = c;
+      cargaGranosView.render(container);
+    });
+    row.querySelector('[data-accion="eliminar"]').addEventListener("click", async () => {
+      const resumen = `${formatearFechaCorta(c.fecha)} · ${origenes.map((o) => o.nombre).join(" + ")} · ${c.kgNeto} kg`;
+      const aviso = c.sincronizado
+        ? "\n\nSe elimina también de la planilla (queda una copia en la pestaña \"Historial de cambios\")."
+        : "";
+      if (!confirm(`¿Eliminar esta carga?\n\n${resumen}${aviso}${await avisoSiloFinalizado(c)}`)) return;
+      await eliminarRegistro(STORE, "cargaGranos", c.id);
+      if (editando && editando.id === c.id) editando = null;
+      window.dispatchEvent(new Event("appcampo-sync-now"));
+      cargaGranosView.render(container);
     });
     lista.appendChild(row);
   }

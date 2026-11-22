@@ -590,6 +590,12 @@ function doPost(e) {
     if (body.accion === "guardarZonaOrden") {
       return guardarZonaOrden(body.nombre, body.zona);
     }
+    if (body.accion === "actualizarRegistro") {
+      return actualizarRegistro(body.tipo, body.registro);
+    }
+    if (body.accion === "eliminarRegistro") {
+      return eliminarRegistro(body.tipo, body.id);
+    }
 
     const cfg = SHEETS[body.tipo];
     if (!cfg) {
@@ -683,6 +689,169 @@ function guardarZonaOrden(nombre, zona) {
   // rechaza, vuelve como mensaje legible y no como una página de error.
   SpreadsheetApp.flush();
   return respond({ ok: true, filas: filas });
+}
+
+// ---------------------------------------------------------------------------
+// Corregir y eliminar registros desde la app (celular).
+// Solo para estos tipos (los que cargan los operarios y se pueden confundir).
+// Cada cambio queda registrado en la pestaña "Historial de cambios" con cómo
+// estaba la fila antes y cómo quedó, para poder revisarlo o recuperarlo.
+// ---------------------------------------------------------------------------
+const TIPOS_EDITABLES = ["cargaGranos", "movimientoInsumo", "aplicacionFitosanitaria"];
+const HOJA_HISTORIAL = "Historial de cambios";
+const HISTORIAL_ENCABEZADOS = ["fecha y hora", "acción", "pestaña", "id", "qué cambió", "fila antes (JSON)", "fila después (JSON)"];
+
+// Fecha/hora de una celda en texto estable (Sheets entrega objetos Date).
+function valorPlano(v) {
+  if (v instanceof Date) {
+    const zona = Session.getScriptTimeZone();
+    const sinHora = v.getHours() === 0 && v.getMinutes() === 0 && v.getSeconds() === 0;
+    return Utilities.formatDate(v, zona, sinHora ? "yyyy-MM-dd" : "yyyy-MM-dd'T'HH:mm:ss");
+  }
+  return v === null || v === undefined ? "" : v;
+}
+
+function filaComoObjeto(headers, valores) {
+  const o = {};
+  headers.forEach(function (h, i) { o[h] = valorPlano(valores[i]); });
+  return o;
+}
+
+// Escribe una línea en "Historial de cambios" (la crea si no existe). Un problema acá
+// nunca tiene que impedir el cambio en sí.
+function registrarHistorial(accion, nombrePestana, id, antes, despues, queCambio) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let hoja = ss.getSheetByName(HOJA_HISTORIAL);
+    if (!hoja) {
+      hoja = ss.insertSheet(HOJA_HISTORIAL);
+      hoja.getRange(1, 1, 1, HISTORIAL_ENCABEZADOS.length).setValues([HISTORIAL_ENCABEZADOS]);
+      hoja.setFrozenRows(1);
+    }
+    hoja.appendRow([
+      new Date().toISOString(),
+      accion,
+      nombrePestana,
+      id,
+      queCambio || "",
+      antes ? JSON.stringify(antes) : "",
+      despues ? JSON.stringify(despues) : "",
+    ]);
+  } catch (err) {
+    Logger.log("No se pudo escribir el historial: " + err);
+  }
+}
+
+// Números de fila (2 en adelante) cuyo id coincide.
+function filasPorId(sheet, cfg, id) {
+  const colId = cfg.headers.indexOf("id") + 1;
+  const ultima = sheet.getLastRow();
+  const encontradas = [];
+  if (colId < 1 || !id || ultima < 2) return encontradas;
+  const ids = sheet.getRange(2, colId, ultima - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) encontradas.push(i + 2);
+  }
+  return encontradas;
+}
+
+function valorParaCelda(v) {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return v;
+}
+
+/**
+ * Reemplaza los datos de una fila ya cargada (la busca por id). No toca el id, la
+ * fecha de alta ni el link de la foto; un campo que el pedido no trae queda como estaba.
+ * Si la fila no existe (alguien la borró en la planilla) la agrega, para no perder
+ * lo que se cargó desde el celular.
+ */
+function actualizarRegistro(tipo, r) {
+  if (TIPOS_EDITABLES.indexOf(tipo) === -1) return respond({ ok: false, error: "tipo no editable: " + tipo });
+  r = r || {};
+  if (!r.id) return respond({ ok: false, error: "falta el id del registro" });
+  const cfg = SHEETS[tipo];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(cfg.name);
+  if (!sheet) {
+    crearPestana(ss, cfg);
+    sheet = ss.getSheetByName(cfg.name);
+  }
+  const candado = LockService.getScriptLock();
+  candado.waitLock(30000);
+  try {
+    asegurarEncabezados(sheet, cfg);
+    const filas = filasPorId(sheet, cfg, r.id);
+    const n = cfg.headers.length;
+    if (filas.length === 0) {
+      const nueva = cfg.headers.map(function (h) {
+        if (h === "fechaSincronizacion") return new Date().toISOString();
+        return valorParaCelda(r[h]);
+      });
+      sheet.appendRow(nueva);
+      SpreadsheetApp.flush();
+      registrarHistorial("AGREGADO (no estaba en la planilla)", cfg.name, r.id, null, filaComoObjeto(cfg.headers, nueva), "");
+      return respond({ ok: true, agregado: true });
+    }
+    const rango = sheet.getRange(filas[0], 1, 1, n);
+    const antes = rango.getValues()[0];
+    const despues = cfg.headers.map(function (h, i) {
+      if (h === "id" || h === "fechaSincronizacion") return antes[i];
+      if (h === "fechaCreacionRegistro") return antes[i] !== "" ? antes[i] : valorParaCelda(r[h]);
+      if (h === "fotoUrl") return antes[i] !== "" ? antes[i] : valorParaCelda(r[h]);
+      if (r[h] === undefined) return antes[i];
+      return valorParaCelda(r[h]);
+    });
+    const objAntes = filaComoObjeto(cfg.headers, antes);
+    const objDespues = filaComoObjeto(cfg.headers, despues);
+    const cambios = [];
+    cfg.headers.forEach(function (h) {
+      if (h === "fechaSincronizacion") return;
+      if (String(objAntes[h]) !== String(objDespues[h])) cambios.push(h + ": " + objAntes[h] + " → " + objDespues[h]);
+    });
+    if (cambios.length === 0) return respond({ ok: true, sinCambios: true });
+    rango.setValues([despues]);
+    // Fuerza a Google a aplicar la escritura ACÁ, dentro del try: si algo la rechaza
+    // (ej. una validación de datos de la columna) vuelve como mensaje legible.
+    SpreadsheetApp.flush();
+    registrarHistorial("EDITADO", cfg.name, r.id, objAntes, objDespues, cambios.join(" | "));
+    return respond({ ok: true, actualizado: true });
+  } finally {
+    candado.releaseLock();
+  }
+}
+
+/**
+ * Elimina de la planilla la fila con ese id (y las repetidas, si las hubiera), dejando
+ * una copia de cómo estaba en "Historial de cambios". Si ya no está, contesta ok igual
+ * (el celular solo necesita saber que la fila ya no existe).
+ */
+function eliminarRegistro(tipo, id) {
+  if (TIPOS_EDITABLES.indexOf(tipo) === -1) return respond({ ok: false, error: "tipo no editable: " + tipo });
+  if (!id) return respond({ ok: false, error: "falta el id del registro" });
+  const cfg = SHEETS[tipo];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(cfg.name);
+  if (!sheet) return respond({ ok: true, noEncontrada: true });
+  const candado = LockService.getScriptLock();
+  candado.waitLock(30000);
+  try {
+    const filas = filasPorId(sheet, cfg, id);
+    if (filas.length === 0) return respond({ ok: true, noEncontrada: true });
+    const n = cfg.headers.length;
+    // Se guarda en el historial ANTES de borrar.
+    filas.forEach(function (fila) {
+      const valores = sheet.getRange(fila, 1, 1, n).getValues()[0];
+      registrarHistorial("ELIMINADO", cfg.name, id, filaComoObjeto(cfg.headers, valores), null, "");
+    });
+    // De abajo hacia arriba para que los números de fila no se corran.
+    filas.slice().reverse().forEach(function (fila) { sheet.deleteRow(fila); });
+    SpreadsheetApp.flush();
+    return respond({ ok: true, eliminadas: filas.length });
+  } finally {
+    candado.releaseLock();
+  }
 }
 
 // Carpeta de Drive por tipo de registro, dentro de "App de Campo - Fotos/<EMPRESA_NOMBRE>/".
