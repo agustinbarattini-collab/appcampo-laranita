@@ -519,6 +519,19 @@ async function unflattenCarga(fila) {
     origen2Nombre = String(fila.origen2Nombre).trim();
   }
 
+  let origen3Tipo = "";
+  let origen3Id = null;
+  let origen3Nombre = "";
+  if (fila.origen3Nombre) {
+    origen3Tipo = fila.origen3Tipo === "silo" ? "silo" : "lote";
+    origen3Id = await resolverIdPorNombre(
+      origen3Tipo === "silo" ? "silosBolsa" : "lotes",
+      fila.origen3Nombre,
+      origen3Tipo === "silo" ? { cultivo: "", kgTotalInicial: 0 } : {}
+    );
+    origen3Nombre = String(fila.origen3Nombre).trim();
+  }
+
   const corredorId = await resolverIdPorNombre("corredores", fila.corredorNombre);
   const gps = fila.gpsLat || fila.gpsLng ? { lat: parseFloat(fila.gpsLat) || 0, lng: parseFloat(fila.gpsLng) || 0 } : null;
   return {
@@ -533,6 +546,10 @@ async function unflattenCarga(fila) {
     origen2Id,
     origen2Nombre,
     kgOrigen2: parseFloat(fila.kgOrigen2) || 0,
+    origen3Tipo,
+    origen3Id,
+    origen3Nombre,
+    kgOrigen3: parseFloat(fila.kgOrigen3) || 0,
     cultivo: fila.cultivo || "",
     ctg: fila.ctg || "",
     chofer: fila.chofer || "",

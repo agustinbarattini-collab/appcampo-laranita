@@ -182,7 +182,25 @@ const cargaGranosView = {
             <div class="field hidden" id="bloqueFinalizarOrigen2" style="margin-top:6px;">
               <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen2" /> Este es el último camión de este silo bolsa — finalizarlo</label>
             </div>
+            <button type="button" class="secondary" id="btnToggleOrigen3" style="margin-top:8px;">+ Agregar 3er origen</button>
             <button type="button" class="secondary" id="btnQuitarOrigen2" style="margin-top:8px;">Quitar segundo origen</button>
+          </div>
+
+          <div class="field hidden" id="bloqueOrigen3">
+            <label>Tercer origen</label>
+            <div class="row">
+              <select id="fOrigen3Tipo">
+                <option value="lote">Lote</option>
+                <option value="silo">Silo Bolsa</option>
+              </select>
+              <select id="fOrigen3Id"></select>
+            </div>
+            <label style="margin-top:8px;">Kg netos 3er origen</label>
+            <input type="text" inputmode="decimal" id="fKgOrigen3" placeholder="Ej: 5000" />
+            <div class="field hidden" id="bloqueFinalizarOrigen3" style="margin-top:6px;">
+              <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen3" /> Este es el último camión de este silo bolsa — finalizarlo</label>
+            </div>
+            <button type="button" class="secondary" id="btnQuitarOrigen3" style="margin-top:8px;">Quitar tercer origen</button>
           </div>
 
           <div class="field hidden" id="bloqueNetoTotal">
@@ -301,11 +319,20 @@ const cargaGranosView = {
     const fKgOrigen2 = container.querySelector("#fKgOrigen2");
     const bloqueFinalizarOrigen2 = container.querySelector("#bloqueFinalizarOrigen2");
     const fFinalizarOrigen2 = container.querySelector("#fFinalizarOrigen2");
+    const bloqueOrigen3 = container.querySelector("#bloqueOrigen3");
+    const btnToggleOrigen3 = container.querySelector("#btnToggleOrigen3");
+    const btnQuitarOrigen3 = container.querySelector("#btnQuitarOrigen3");
+    const origen3TipoSel = container.querySelector("#fOrigen3Tipo");
+    const origen3IdSel = container.querySelector("#fOrigen3Id");
+    const fKgOrigen3 = container.querySelector("#fKgOrigen3");
+    const bloqueFinalizarOrigen3 = container.querySelector("#bloqueFinalizarOrigen3");
+    const fFinalizarOrigen3 = container.querySelector("#fFinalizarOrigen3");
     const fNeto = container.querySelector("#fNeto");
     const fNetoLabel = container.querySelector("#fNetoLabel");
     const bloqueNetoTotal = container.querySelector("#bloqueNetoTotal");
     const fNetoTotal = container.querySelector("#fNetoTotal");
     let origen2Activo = false;
+    let origen3Activo = false;
 
     // Cada origen se pesa/mide por separado (no hay una sola báscula para el
     // camión entero), así que kg netos de cada uno se cargan directo y el
@@ -314,7 +341,8 @@ const cargaGranosView = {
       if (!origen2Activo) return;
       const kg1 = parseNumero(fNeto.value);
       const kg2 = parseNumero(fKgOrigen2.value);
-      fNetoTotal.textContent = (kg1 + kg2).toLocaleString("es-AR");
+      const kg3 = origen3Activo ? parseNumero(fKgOrigen3.value) : 0;
+      fNetoTotal.textContent = (kg1 + kg2 + kg3).toLocaleString("es-AR");
     }
 
     async function actualizarOrigen2() {
@@ -331,7 +359,35 @@ const cargaGranosView = {
       await actualizarOrigen2();
       actualizarNetoTotal();
     }
+    async function actualizarOrigen3() {
+      await poblarOrigenSelect(origen3IdSel, origen3TipoSel.value);
+      bloqueFinalizarOrigen3.classList.toggle("hidden", origen3TipoSel.value !== "silo");
+      fFinalizarOrigen3.checked = false;
+    }
+    async function activarOrigen3() {
+      origen3Activo = true;
+      bloqueOrigen3.classList.remove("hidden");
+      btnToggleOrigen3.classList.add("hidden");
+      await actualizarOrigen3();
+      actualizarNetoTotal();
+    }
+    function desactivarOrigen3() {
+      origen3Activo = false;
+      bloqueOrigen3.classList.add("hidden");
+      btnToggleOrigen3.classList.remove("hidden");
+      origen3IdSel.value = "";
+      fKgOrigen3.value = "";
+      fFinalizarOrigen3.checked = false;
+      actualizarNetoTotal();
+    }
+    btnToggleOrigen3.addEventListener("click", activarOrigen3);
+    btnQuitarOrigen3.addEventListener("click", desactivarOrigen3);
+    origen3TipoSel.addEventListener("change", actualizarOrigen3);
+    fKgOrigen3.addEventListener("input", actualizarNetoTotal);
+
     function desactivarOrigen2() {
+      // Sin 2do origen no puede haber 3ro: se quitan los dos.
+      if (origen3Activo) desactivarOrigen3();
       origen2Activo = false;
       bloqueOrigen2.classList.add("hidden");
       btnToggleOrigen2.classList.remove("hidden");
@@ -395,7 +451,28 @@ const cargaGranosView = {
           return;
         }
       }
-      const neto = kgOrigen1 + kgOrigen2;
+      let kgOrigen3 = 0;
+      let origen3Id = "";
+      if (origen3Activo) {
+        origen3Id = origen3IdSel.value;
+        if (!origen3Id) {
+          alert("Elegí el tercer origen o tocá \"Quitar tercer origen\" si no corresponde.");
+          return;
+        }
+        if (
+          (origenTipoSel.value === origen3TipoSel.value && origenId === origen3Id) ||
+          (origen2TipoSel.value === origen3TipoSel.value && origen2Id === origen3Id)
+        ) {
+          alert("Elegiste el mismo origen más de una vez. Si no corresponde, quitá el tercer origen.");
+          return;
+        }
+        kgOrigen3 = parseNumero(fKgOrigen3.value);
+        if (kgOrigen3 <= 0) {
+          alert("Ingresá los kg netos del tercer origen.");
+          return;
+        }
+      }
+      const neto = kgOrigen1 + kgOrigen2 + kgOrigen3;
 
       let origenNombre = "";
       let silo1KgResidual = null;
@@ -437,6 +514,28 @@ const cargaGranosView = {
         }
       }
 
+      let origen3Nombre = "";
+      let origen3Tipo = "";
+      let silo3KgResidual = null;
+      if (origen3Activo) {
+        origen3Tipo = origen3TipoSel.value;
+        if (origen3Tipo === "silo") {
+          const silosStock3 = await getSilosBolsaConStock();
+          const silo3 = silosStock3.find((s) => s.id === origen3Id);
+          origen3Nombre = silo3 ? silo3.nombre : "";
+          silo3KgResidual = silo3 ? silo3.kgResidual : 0;
+          if (silo3 && kgOrigen3 > silo3.kgResidual) {
+            const continuar3 = confirm(
+              `El silo bolsa "${silo3.nombre}" tiene ${silo3.kgResidual} kg residuales y estás cargando ${kgOrigen3} kg desde ahí.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
+            );
+            if (!continuar3) return;
+          }
+        } else {
+          const lote3 = await dbGet("lotes", origen3Id);
+          origen3Nombre = lote3 ? lote3.nombre : "";
+        }
+      }
+
       const corredorId = container.querySelector("#fCorredorId").value;
       const corredor = await dbGet("corredores", corredorId);
 
@@ -464,6 +563,10 @@ const cargaGranosView = {
         origen2Nombre,
         kgOrigen1,
         kgOrigen2,
+        origen3Tipo,
+        origen3Id: origen3Activo ? origen3Id : "",
+        origen3Nombre,
+        kgOrigen3,
         cultivo: fCultivo.value.trim(),
         ctg: container.querySelector("#fCtg").value.trim(),
         chofer: container.querySelector("#fChofer").value.trim(),
@@ -491,6 +594,10 @@ const cargaGranosView = {
       if (origen2Activo && origen2TipoSel.value === "silo" && fFinalizarOrigen2.checked) {
         const ajuste2 = await finalizarSiloBolsa(origen2Id, silo2KgResidual || 0, kgOrigen2, fecha);
         mensajesAjuste.push(mensajeAjuste(ajuste2));
+      }
+      if (origen3Activo && origen3TipoSel.value === "silo" && fFinalizarOrigen3.checked) {
+        const ajuste3 = await finalizarSiloBolsa(origen3Id, silo3KgResidual || 0, kgOrigen3, fecha);
+        mensajesAjuste.push(mensajeAjuste(ajuste3));
       }
 
       window.dispatchEvent(new Event("appcampo-sync-now"));
@@ -523,11 +630,14 @@ async function renderListadoCargas(container, campaniaActiva) {
     const row = document.createElement("div");
     row.className = "list-item";
     const kgOrigen2 = c.kgOrigen2 || 0;
-    const kgOrigen1 = (c.kgNeto || 0) - kgOrigen2;
-    const origenTxt = c.origen2Nombre
-      ? `<strong>${c.origenNombre}</strong> (${c.origenTipo === "silo" ? "Silo Bolsa" : "Lote"}) + <strong>${c.origen2Nombre}</strong> (${c.origen2Tipo === "silo" ? "Silo Bolsa" : "Lote"})`
-      : `<strong>${c.origenNombre}</strong> (${c.origenTipo === "silo" ? "Silo Bolsa" : "Lote"})`;
-    const kgTxt = c.origen2Nombre ? `${c.kgNeto} kg netos (${kgOrigen1} + ${kgOrigen2})` : `${c.kgNeto} kg netos`;
+    const kgOrigen3 = c.kgOrigen3 || 0;
+    const kgOrigen1 = (c.kgNeto || 0) - kgOrigen2 - kgOrigen3;
+    const tipoTxt = (t) => (t === "silo" ? "Silo Bolsa" : "Lote");
+    const origenes = [{ nombre: c.origenNombre, tipo: c.origenTipo, kg: kgOrigen1 }];
+    if (c.origen2Nombre) origenes.push({ nombre: c.origen2Nombre, tipo: c.origen2Tipo, kg: kgOrigen2 });
+    if (c.origen3Nombre) origenes.push({ nombre: c.origen3Nombre, tipo: c.origen3Tipo, kg: kgOrigen3 });
+    const origenTxt = origenes.map((o) => `<strong>${o.nombre}</strong> (${tipoTxt(o.tipo)})`).join(" + ");
+    const kgTxt = origenes.length > 1 ? `${c.kgNeto} kg netos (${origenes.map((o) => o.kg).join(" + ")})` : `${c.kgNeto} kg netos`;
     const campaniaTxt = c.campaniaNombre || (campaniaActiva ? campaniaActiva.nombre : "sin campaña");
     const fotoTxt = c.fotoUrl
       ? ` · <a href="${c.fotoUrl}" target="_blank" rel="noopener">Ver foto</a>`

@@ -37,6 +37,10 @@ const SHEETS = {
       "observaciones", "fotoUrl",
       "gpsLat", "gpsLng", "kgBrutos", "tara",
       "fechaCreacionRegistro", "fechaSincronizacion",
+      // Tercer origen: van al FINAL para no correr de lugar las columnas (y los
+      // datos) que ya existen. Los encabezados se escriben solos al primer envío.
+      // No cambiar de lugar las columnas de esta pestaña: la app las llena por posición.
+      "origen3Tipo", "origen3Nombre", "kgOrigen3",
     ],
   },
   movimientoInsumo: {
@@ -539,6 +543,7 @@ function backfillKgOrigen1CargaGranos() {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const colKgOrigen1 = headers.indexOf("kgOrigen1");
   const colKgOrigen2 = headers.indexOf("kgOrigen2");
+  const colKgOrigen3 = headers.indexOf("kgOrigen3"); // puede no existir (-1)
   const colKgNeto = headers.indexOf("kgNeto");
   if (colKgOrigen1 === -1 || colKgOrigen2 === -1 || colKgNeto === -1) {
     Logger.log("Faltan columnas kgOrigen1/kgOrigen2/kgNeto en la fila 1 — no se puede completar.");
@@ -553,7 +558,8 @@ function backfillKgOrigen1CargaGranos() {
     if (fila[colKgOrigen1] === "" || fila[colKgOrigen1] === null) {
       const kgNeto = parseFloat(fila[colKgNeto]) || 0;
       const kgOrigen2 = parseFloat(fila[colKgOrigen2]) || 0;
-      fila[colKgOrigen1] = kgNeto - kgOrigen2;
+      const kgOrigen3 = colKgOrigen3 === -1 ? 0 : parseFloat(fila[colKgOrigen3]) || 0;
+      fila[colKgOrigen1] = kgNeto - kgOrigen2 - kgOrigen3;
       completadas++;
     }
   });
@@ -603,6 +609,7 @@ function doPost(e) {
     const candado = LockService.getScriptLock();
     candado.waitLock(30000);
     try {
+      asegurarEncabezados(sheet, cfg);
       const colId = cfg.headers.indexOf("id") + 1;
       const ultima = sheet.getLastRow();
       if (colId > 0 && r.id && ultima >= 2) {
@@ -734,6 +741,20 @@ function responderRegistros() {
     registros[key] = sheet ? leerPestana(sheet, cfg.headers) : [];
   });
   return respond({ ok: true, registros: registros });
+}
+
+/**
+ * Si la pestaña tiene menos columnas que las que ahora define la app (se agregó una
+ * al final, ej. el 3er origen), crea las que faltan y escribe sus títulos en la fila
+ * 1. Solo completa encabezados vacíos: no cambia ni mueve nada de lo ya cargado.
+ */
+function asegurarEncabezados(sheet, cfg) {
+  const n = cfg.headers.length;
+  if (sheet.getMaxColumns() < n) sheet.insertColumnsAfter(sheet.getMaxColumns(), n - sheet.getMaxColumns());
+  const actual = sheet.getRange(1, 1, 1, n).getValues()[0];
+  for (let i = 0; i < n; i++) {
+    if (String(actual[i]).trim() === "") sheet.getRange(1, i + 1).setValue(cfg.headers[i]);
+  }
 }
 
 /**
