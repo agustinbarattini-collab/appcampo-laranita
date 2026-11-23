@@ -643,6 +643,8 @@ async function unflattenCarga(fila) {
     ctg: fila.ctg || "",
     chofer: fila.chofer || "",
     patente: fila.patente || "",
+    transportista: fila.transportista || "",
+    nCarga: numOrNull(fila.nCarga),
     corredorId,
     corredorNombre: String(fila.corredorNombre || "").trim(),
     kgBrutos: parseFloat(fila.kgBrutos) || 0,

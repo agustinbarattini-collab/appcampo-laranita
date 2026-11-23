@@ -14,6 +14,21 @@ function today() {
 // para que sobreviva a volver a dibujar la pantalla.
 let editando = null;
 
+// Cargas de la misma campaña (por id o, si vienen de otro celular, por nombre).
+function mismaCampania(c, campaniaId, campaniaNombre) {
+  return (campaniaId && c.campaniaId === campaniaId) || (campaniaNombre && c.campaniaNombre === campaniaNombre);
+}
+
+// Próximo número correlativo de carga (por camión) dentro de la campaña: el mayor + 1.
+async function siguienteNumero(campaniaId, campaniaNombre) {
+  const cargas = await dbGetAll(STORE);
+  let max = 0;
+  for (const c of cargas) {
+    if (mismaCampania(c, campaniaId, campaniaNombre)) max = Math.max(max, parseInt(c.nCarga, 10) || 0);
+  }
+  return max + 1;
+}
+
 // Kg que esta misma carga (si se está corrigiendo) ya descontó de un silo: sirven para
 // no contarlos dos veces al avisar que se carga más de lo que queda.
 function kgPreviosDe(carga, tipo, id) {
@@ -179,6 +194,12 @@ const cargaGranosView = {
           </div>
 
           <div class="field">
+            <label>N° de carga (camión)</label>
+            <input type="text" inputmode="numeric" id="fNCarga" />
+            <div class="muted">Se completa solo con el siguiente número de la campaña; se puede corregir.</div>
+          </div>
+
+          <div class="field">
             <label>Origen</label>
             <div class="row">
               <select id="fOrigenTipo">
@@ -244,6 +265,11 @@ const cargaGranosView = {
               <label>N° de CTG</label>
               <input type="text" id="fCtg" />
             </div>
+          </div>
+
+          <div class="field">
+            <label>Transportista</label>
+            <input type="text" id="fTransportista" />
           </div>
 
           <div class="row">
@@ -432,6 +458,16 @@ const cargaGranosView = {
 
     await poblarCorredorSelect(container.querySelector("#fCorredorId"));
 
+    // N° de carga: se sugiere el siguiente de la campaña elegida (al corregir, se conserva el que tenía).
+    const fNCarga = container.querySelector("#fNCarga");
+    async function sugerirNumero() {
+      if (editando) return;
+      const camp = campanias.find((x) => x.id === fCampaniaSel.value);
+      fNCarga.value = String(await siguienteNumero(fCampaniaSel.value, camp ? camp.nombre : ""));
+    }
+    fCampaniaSel.addEventListener("change", sugerirNumero);
+    if (!editando) await sugerirNumero();
+
     // Modo corrección: se precarga el formulario con los datos de la carga elegida.
     if (editando) {
       const c = editando;
@@ -463,6 +499,8 @@ const cargaGranosView = {
       container.querySelector("#fCtg").value = c.ctg || "";
       container.querySelector("#fChofer").value = c.chofer || "";
       container.querySelector("#fPatente").value = c.patente || "";
+      container.querySelector("#fTransportista").value = c.transportista || "";
+      fNCarga.value = c.nCarga === undefined || c.nCarga === null ? "" : String(c.nCarga);
       const corredorEdit = (await dbGetAll("corredores")).find((x) => x.id === c.corredorId || x.nombre === c.corredorNombre);
       if (corredorEdit) container.querySelector("#fCorredorId").value = corredorEdit.id;
       container.querySelector("#fHumedad").value = c.humedad === null || c.humedad === undefined ? "" : String(c.humedad);
@@ -632,6 +670,14 @@ const cargaGranosView = {
 
       const fecha = container.querySelector("#fFecha").value;
 
+      const numeroElegido = parseInt(fNCarga.value, 10) || 0;
+      if (numeroElegido > 0) {
+        const repetida = (await dbGetAll(STORE)).find(
+          (x) => (!editando || x.id !== editando.id) && parseInt(x.nCarga, 10) === numeroElegido && mismaCampania(x, campaniaId, campania ? campania.nombre : "")
+        );
+        if (repetida && !confirm(`Ya existe una carga N° ${numeroElegido} en esta campaña (${formatearFechaCorta(repetida.fecha)} · ${repetida.origenNombre}).\n¿Guardar igual con el mismo número?`)) return;
+      }
+
       const datos = {
         fecha,
         campaniaId,
@@ -652,6 +698,8 @@ const cargaGranosView = {
         ctg: container.querySelector("#fCtg").value.trim(),
         chofer: container.querySelector("#fChofer").value.trim(),
         patente: container.querySelector("#fPatente").value.trim(),
+        transportista: container.querySelector("#fTransportista").value.trim(),
+        nCarga: parseInt(fNCarga.value, 10) || (editando ? null : await siguienteNumero(campaniaId, campania ? campania.nombre : "")),
         corredorId,
         corredorNombre: corredor ? corredor.nombre : "",
         kgBrutos: 0,
@@ -759,7 +807,7 @@ async function renderListadoCargas(container, campaniaActiva) {
     row.innerHTML = `
       <div>
         <div>${origenTxt} → ${c.corredorNombre}</div>
-        <div class="muted">${formatearFechaCorta(c.fecha)} · Campaña ${campaniaTxt} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
+        <div class="muted">${c.nCarga ? "N° " + c.nCarga + " · " : ""}${formatearFechaCorta(c.fecha)} · Campaña ${campaniaTxt} · ${c.cultivo} · ${kgTxt}${c.transportista ? " · Transp.: " + c.transportista : ""}${fotoTxt}</div>
         ${errorTxt}
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">

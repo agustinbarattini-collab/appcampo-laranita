@@ -41,6 +41,8 @@ const SHEETS = {
       // datos) que ya existen. Los encabezados se escriben solos al primer envío.
       // No cambiar de lugar las columnas de esta pestaña: la app las llena por posición.
       "origen3Tipo", "origen3Nombre", "kgOrigen3",
+      // Solo La Ranita: número correlativo de carga (por camión, por campaña) y transportista.
+      "nCarga", "transportista",
     ],
   },
   movimientoInsumo: {
@@ -852,6 +854,51 @@ function eliminarRegistro(tipo, id) {
   } finally {
     candado.releaseLock();
   }
+}
+
+/**
+ * Correr UNA vez desde el editor (▶): le pone "nCarga" a las cargas que todavía no lo
+ * tienen, numerándolas por campaña en orden de fecha (y de carga, si la fecha es la misma).
+ * Si una campaña ya tiene números, sigue desde el mayor. No toca las filas ya numeradas.
+ * Los celulares reciben los números al sincronizar.
+ */
+function numerarCargasExistentes() {
+  const cfg = SHEETS.cargaGranos;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(cfg.name);
+  if (!sheet || sheet.getLastRow() < 2) {
+    Logger.log("No hay cargas para numerar.");
+    return;
+  }
+  asegurarEncabezados(sheet, cfg);
+  const n = cfg.headers.length;
+  const col = function (h) { return cfg.headers.indexOf(h); };
+  const filas = sheet.getRange(2, 1, sheet.getLastRow() - 1, n).getValues();
+  const maximos = {};
+  const sinNumero = [];
+  filas.forEach(function (f, i) {
+    if (String(f[col("id")]).trim() === "") return;
+    const camp = String(f[col("campaniaNombre")]);
+    const num = parseInt(f[col("nCarga")], 10);
+    if (num > 0) {
+      maximos[camp] = Math.max(maximos[camp] || 0, num);
+    } else {
+      sinNumero.push({ i: i, camp: camp, fecha: String(valorPlano(f[col("fecha")])), alta: String(valorPlano(f[col("fechaCreacionRegistro")])) });
+    }
+  });
+  sinNumero.sort(function (a, b) {
+    return a.camp.localeCompare(b.camp) || a.fecha.localeCompare(b.fecha) || a.alta.localeCompare(b.alta) || a.i - b.i;
+  });
+  sinNumero.forEach(function (x) {
+    maximos[x.camp] = (maximos[x.camp] || 0) + 1;
+    filas[x.i][col("nCarga")] = maximos[x.camp];
+  });
+  const c = col("nCarga") + 1;
+  sheet.getRange(2, c, filas.length, 1).setValues(filas.map(function (f) { return [f[col("nCarga")]]; }));
+  SpreadsheetApp.flush();
+  const texto = "Numeradas " + sinNumero.length + " cargas. Último número por campaña: " + JSON.stringify(maximos);
+  Logger.log(texto);
+  try { SpreadsheetApp.getActive().toast(texto, "Cargas numeradas", 10); } catch (e) {}
 }
 
 // Carpeta de Drive por tipo de registro, dentro de "App de Campo - Fotos/<EMPRESA_NOMBRE>/".
